@@ -1,7 +1,10 @@
-data/
-outputs/
-runs/
-logs/
+# Local data and run outputs (repository root only; efficient_cryptos/data/ is code)
+/data/
+/data_meme/
+/outputs/
+/runs/
+/logs/
+
 __pycache__/
 *.py[cod]
 .pytest_cache/
