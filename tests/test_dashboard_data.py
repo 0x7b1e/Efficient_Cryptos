@@ -153,3 +153,86 @@ def test_orders_matched_by_client_order_index():
     orders = d.orders_frame([record])
     assert orders["status"].tolist() == ["FILLED", "ERROR", "rejected"]
     assert orders.loc[1, "error"] == "margin" and orders.loc[0, "executed_qty"] == 1
+
+
+# ------------------------------------------------------------ costs and SHADOW
+def test_rust_costs_split_gross_cost_funding():
+    ts = pd.DataFrame({
+        "timestamp": pd.date_range("2026-01-01", periods=3, freq="30min", tz="UTC"),
+        "pnl": [-10.0, 20.0, 5.0], "cost": [10.0, 0.0, 2.0], "funding": [0.0, 1.0, -1.0],
+        "equity": [9990.0, 10010.0, 10015.0], "turnover": [1.0, 0.0, 0.5],
+    })
+    curves, summary = d.rust_costs(ts)
+    assert summary["initial_equity"] == pytest.approx(10000.0)
+    assert summary["gross_pnl"] == pytest.approx(15 + 12 + 0)
+    assert summary["net_pnl"] == pytest.approx(15.0)
+    assert summary["cost_share_of_gross_pct"] == pytest.approx(12 / 27 * 100)
+    assert curves["net_pnl"].iloc[-1] == pytest.approx(15.0)
+    assert summary["annual_turnover"] == pytest.approx(0.5 * 48 * 365)
+
+
+def test_scan_sweep_cost_share(sweeps):
+    _, train, _ = sweeps
+    frame = d.scan_sweep(train)
+    row = frame[(frame.factor_id == "fa") & (frame.rebalance == "4h")].iloc[0]
+    # fixture: return 7.5%, cost 12 on 10,000 initial -> gross 762
+    assert row["cost_pct_of_equity"] == pytest.approx(0.12)
+    assert row["cost_share_of_gross_pct"] == pytest.approx(12 / 762 * 100)
+
+
+@pytest.fixture()
+def shadow_run(tmp_path, monkeypatch):
+    from tests import test_shadow_replay as replay_tests
+    replay_tests._write_data(tmp_path / "data", crash_minute=40, funding=0.001)
+    out = replay_tests._run(tmp_path, monkeypatch, "--symbol-stop", "0.05", "--shadow-min-periods", "1",
+                            "--shadow-positive-periods", "0", "--shadow-recovery-pnl-pct", "0")
+    return out
+
+
+def test_shadow_replay_loaders(shadow_run, tmp_path):
+    # Rust and engine-replay sweeps share a layout; discovery must keep them apart.
+    assert d.find_sweep_roots(tmp_path, kind="shadow") == [shadow_run]
+    assert d.find_sweep_roots(tmp_path, kind="rust") == []
+    assert d.scan_sweep(shadow_run).empty
+    frame = d.scan_shadow(shadow_run)
+    assert set(frame["rebalance"]) == {"0.5h", "1h"}
+    row = frame[frame.rebalance == "0.5h"].iloc[0]
+    assert row["shadow_entries"] >= 1 and row["gross_leverage"] == 3
+    metrics = json.loads((shadow_run / "0.5h" / "f1.metrics.json").read_text())
+    steps, events = d.shadow_timeseries(row["timeseries_path"], metrics["config"]["initial_equity"], 3)
+    assert steps["cost_exact"].all()
+    assert steps["cum_cost"].iloc[-1] == pytest.approx(metrics["total_cost"])
+    assert steps["net_pnl"].iloc[-1] == pytest.approx(metrics["final_equity"] - 10000)
+    assert (steps["gross_pnl"] - steps["net_pnl"] - steps["cum_cost"] - steps["cum_funding_paid"]).abs().max() < 1e-9
+    live = steps[steps["state"] == "LIVE"]
+    assert (live["margin_used_pct"].dropna() > 0).any()
+    assert not events.empty and events["risk_events"].str.contains("TO_SHADOW").any()
+    assert any(state == "SHADOW" for *_, state in d.frame_state_spans(steps))
+
+
+def test_live_costs_margin_and_recovery(live_dir):
+    records = d.read_jsonl_tail(live_dir / "audit.jsonl", 10_000)
+    audit = d.audit_frame(records)
+    assert audit["cost_exact"].all() and audit["cum_cost_usd"].is_monotonic_increasing
+    state = d.read_json(live_dir / "engine_state.json")
+    # The audit carries the engine's exact running totals (the run starts at zero cost).
+    assert audit["cum_cost_usd"].iloc[-1] == pytest.approx(state["total_cost"] - audit["total_cost"].iloc[0])
+    assert audit["total_cost"].iloc[-1] == pytest.approx(state["total_cost"])
+    config = d.risk_config(d.read_json(live_dir / "latest.json"))
+    assert config["shadow_min_periods"] == 1 and config["gross_leverage"] == 3
+    # Old audit lines without engine_totals fall back to an estimate.
+    old = [{k: v for k, v in r.items() if k != "engine_totals"} for r in records]
+    assert not d.audit_frame(old)["cost_exact"].any()
+    # The first cycle reads the account before its own orders, so start from the second.
+    with_positions = audit[audit["long_notional"] > 0].iloc[1:]
+    assert (with_positions["margin_used_pct"] > 0).all()
+    # 3x leverage with a 20% buffer locks ~80% of NAV as initial margin when fully invested.
+    assert with_positions["margin_used_pct"].max() == pytest.approx(80.0, abs=2.0)
+    progress = d.recovery_progress({"state": "SHADOW", "shadow_equity": 1.004, "shadow_periods": 2,
+                                    "shadow_positive_periods": 2, "blocked_symbols": {}}, 3, 2, 0.01)
+    assert not progress["ready"]
+    assert progress["checks"]["periods"] == (2, 3, False)
+    assert progress["checks"]["shadow_pnl_pct"][2] is False
+    ready = d.recovery_progress({"state": "SHADOW", "shadow_equity": 1.02, "shadow_periods": 3,
+                                 "shadow_positive_periods": 2, "blocked_symbols": {}}, 3, 2, 0.01)
+    assert ready["ready"]

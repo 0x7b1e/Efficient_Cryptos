@@ -74,8 +74,17 @@ def dir_signature(root: str | Path, pattern: str = "*") -> tuple:
     return (count, newest)
 
 
-def find_sweep_roots(base: str | Path, max_depth: int = 3) -> list[Path]:
-    """Directories below ``base`` that contain ``<rebalance>/*.metrics.json`` (or metrics directly)."""
+def metrics_kind(payload: dict) -> str:
+    """'shadow' for engine replays (run_selected_factor_shadow.py), 'rust' for the Rust backtest."""
+    return "shadow" if "final_state" in payload or "shadow_entries" in payload else "rust"
+
+
+def find_sweep_roots(base: str | Path, max_depth: int = 3, kind: str | None = "rust") -> list[Path]:
+    """Directories below ``base`` with ``<rebalance>/*.metrics.json`` (or metrics directly).
+
+    ``kind`` keeps only Rust sweeps ("rust") or engine replays ("shadow"); both
+    use the same layout, so one metrics file per directory is peeked at.
+    """
     base = Path(base)
     if not base.exists():
         return []
@@ -85,9 +94,12 @@ def find_sweep_roots(base: str | Path, max_depth: int = 3) -> list[Path]:
         depth = len(Path(dirpath).parts) - base_depth
         if depth >= max_depth:
             dirnames[:] = []
-        if any(name.endswith(".metrics.json") for name in filenames):
+        sample = next((name for name in filenames if name.endswith(".metrics.json")), None)
+        if sample:
             here = Path(dirpath)
-            roots.add(here.parent if rebalance_hours(here.name) != math.inf else here)
+            payload = read_json(here / sample) or {}
+            if kind is None or metrics_kind(payload) == kind:
+                roots.add(here.parent if rebalance_hours(here.name) != math.inf else here)
             dirnames[:] = []
         dirnames[:] = [d for d in dirnames if d not in {"plots", "logs"}]
     return sorted(roots)
@@ -104,6 +116,8 @@ def scan_sweep(root: str | Path) -> pd.DataFrame:
             metrics = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not isinstance(metrics, dict) or metrics_kind(metrics) != "rust":
+            continue
         factor_id = str(metrics.get("factor_id") or path.name.removesuffix(".metrics.json"))
         rebalance = path.parent.name if path.parent != root else "unknown"
         stem = path.name.removesuffix(".metrics.json")
@@ -117,6 +131,12 @@ def scan_sweep(root: str | Path) -> pd.DataFrame:
     if frame.empty:
         return frame
     frame["rebalance_hours"] = frame["rebalance"].map(rebalance_hours)
+    # Share of the gross (pre-cost) PnL eaten by fees + slippage. Funding is not in
+    # metrics.json; the factor detail adds it from the timeseries.
+    initial = frame["final_equity"] / (1.0 + frame["return_pct"] / 100.0)
+    gross = frame["final_equity"] - initial + frame["total_cost"]
+    frame["cost_pct_of_equity"] = frame["total_cost"] / initial * 100.0
+    frame["cost_share_of_gross_pct"] = np.where(gross > 0, frame["total_cost"] / gross * 100.0, np.nan)
     return frame.sort_values(["sharpe", "factor_id"], ascending=[False, True], na_position="last").reset_index(drop=True)
 
 
@@ -227,6 +247,143 @@ def layer_summary(path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return bars, cumulative
 
 
+# ------------------------------------------------------------ costs
+def _cost_summary(gross: float, cost: float, funding_paid: float, initial: float) -> dict[str, float]:
+    net = gross - cost - funding_paid
+    drag = cost + funding_paid
+    return {
+        "gross_pnl": gross, "cost": cost, "funding_paid": funding_paid, "net_pnl": net,
+        "initial_equity": initial,
+        "gross_return_pct": gross / initial * 100.0 if initial else math.nan,
+        "cost_pct_of_equity": cost / initial * 100.0 if initial else math.nan,
+        "funding_pct_of_equity": funding_paid / initial * 100.0 if initial else math.nan,
+        "net_return_pct": net / initial * 100.0 if initial else math.nan,
+        # Only meaningful when the strategy made money before costs.
+        "cost_share_of_gross_pct": drag / gross * 100.0 if gross > 0 else math.nan,
+    }
+
+
+def rust_costs(ts: pd.DataFrame, bars_per_year: float = 48 * 365) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Cumulative gross PnL, fees+slippage, funding and net PnL from a Rust timeseries.
+
+    Rust books ``net = gross - cost/equity - funding/equity`` per bar with
+    ``cost`` and ``funding`` in dollars (funding > 0 means paid).
+    """
+    if ts.empty or "pnl" not in ts:
+        return pd.DataFrame(), {}
+    cost = pd.to_numeric(ts.get("cost", 0.0), errors="coerce").fillna(0.0)
+    funding = pd.to_numeric(ts.get("funding", 0.0), errors="coerce").fillna(0.0)
+    pnl = pd.to_numeric(ts["pnl"], errors="coerce").fillna(0.0)
+    gross = pnl + cost + funding
+    curves = pd.DataFrame({
+        "timestamp": ts["timestamp"],
+        "gross_pnl": gross.cumsum(), "cost": cost.cumsum(), "funding_paid": funding.cumsum(),
+        "net_pnl": pnl.cumsum(),
+    })
+    equity0 = float(pd.to_numeric(ts["equity"], errors="coerce").iloc[0]) - float(pnl.iloc[0])
+    summary = _cost_summary(float(gross.sum()), float(cost.sum()), float(funding.sum()), equity0)
+    if "turnover" in ts:
+        summary["annual_turnover"] = float(pd.to_numeric(ts["turnover"], errors="coerce").mean() * bars_per_year)
+    return curves, summary
+
+
+def scan_shadow(root: str | Path) -> pd.DataFrame:
+    """One row per (factor, rebalance) from run_selected_factor_shadow.py outputs."""
+    root = Path(root)
+    rows = []
+    for path in list(root.glob("*/*.metrics.json")) + list(root.glob("*.metrics.json")):
+        payload = read_json(path)
+        if not payload or metrics_kind(payload) != "shadow":
+            continue
+        config = payload.get("config") or {}
+        stem = path.name.removesuffix(".metrics.json")
+        initial = _num(config.get("initial_equity"))
+        if math.isnan(initial):
+            ret = _num(payload.get("return_pct"))
+            initial = _num(payload.get("final_equity")) / (1 + ret / 100) if not math.isnan(ret) else math.nan
+        cost, funding_received = _num(payload.get("total_cost")), _num(payload.get("total_funding"))
+        final = _num(payload.get("final_equity"))
+        gross = final - initial + cost - (0.0 if math.isnan(funding_received) else funding_received)
+        rows.append({
+            "factor_id": str(payload.get("factor_id") or stem),
+            "rebalance": path.parent.name if path.parent != root else "unknown",
+            "return_pct": _num(payload.get("return_pct")),
+            "sharpe": _num(payload.get("sharpe_annualized")),
+            "max_drawdown_pct": _num(payload.get("max_drawdown_pct")),
+            "final_state": payload.get("final_state", ""),
+            "shadow_entries": _num(payload.get("shadow_entries")),
+            "shadow_exits": _num(payload.get("shadow_exits")),
+            "shadow_equity": _num(payload.get("shadow_equity")),
+            "total_cost": cost,
+            "funding_paid": -funding_received if not math.isnan(funding_received) else math.nan,
+            "cost_pct_of_equity": cost / initial * 100 if initial else math.nan,
+            "cost_share_of_gross_pct": (cost - (funding_received or 0.0)) / gross * 100 if gross > 0 else math.nan,
+            "bars": _num(payload.get("bars")),
+            "gross_leverage": _num(config.get("gross_leverage")),
+            "timeseries_path": str(path.with_name(f"{stem}.timeseries.csv")),
+        })
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    frame["rebalance_hours"] = frame["rebalance"].map(rebalance_hours)
+    return frame.sort_values(["sharpe", "factor_id"], ascending=[False, True], na_position="last").reset_index(drop=True)
+
+
+def shadow_timeseries(path: str | Path, initial_equity: float, gross_leverage: float | None = None,
+                      max_points: int = 6000) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Engine replay rows -> (per-step frame, risk-event frame).
+
+    The per-step frame has live equity, shadow equity, state, cumulative live
+    cost/funding (exact when the replay recorded ``total_cost``), and exposure
+    / margin use when the replay recorded notionals.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return pd.DataFrame(), pd.DataFrame()
+    frame = pd.read_csv(path)
+    if frame.empty or "timestamp" not in frame:
+        return pd.DataFrame(), pd.DataFrame()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, format="ISO8601", errors="coerce")
+    frame = frame.dropna(subset=["timestamp"]).reset_index(drop=True)
+    events = frame[frame.get("risk_events", pd.Series("", index=frame.index)).fillna("").astype(str) != ""]
+    events = events[["timestamp", "state", "risk_events", "equity", "shadow_equity"]].copy() if not events.empty else pd.DataFrame()
+    steps = frame[frame.get("kind", "step") == "step"].copy() if "kind" in frame else frame.copy()
+    equity = pd.to_numeric(steps["equity"], errors="coerce")
+    previous = equity.shift(1).fillna(initial_equity)
+    if "total_cost" in steps:
+        steps["cum_cost"] = pd.to_numeric(steps["total_cost"], errors="coerce")
+        steps["cum_funding_paid"] = -pd.to_numeric(steps["total_funding"], errors="coerce")
+        steps["cost_exact"] = True
+    else:
+        # Older replays: rebuild from per-row fractions on the live book.
+        live = steps["state"] == "LIVE"
+        steps["cum_cost"] = (pd.to_numeric(steps["cost"], errors="coerce").fillna(0) * previous).where(live, 0).cumsum()
+        steps["cum_funding_paid"] = (-pd.to_numeric(steps.get("funding", 0.0), errors="coerce").fillna(0)).where(live, 0).cumsum()
+        steps["cost_exact"] = False
+    steps["net_pnl"] = equity - initial_equity
+    steps["gross_pnl"] = steps["net_pnl"] + steps["cum_cost"] + steps["cum_funding_paid"]
+    if "long_notional" in steps:
+        gross = pd.to_numeric(steps["long_notional"], errors="coerce") + pd.to_numeric(steps["short_notional"], errors="coerce")
+        steps["gross_notional"] = gross
+        steps["net_notional"] = pd.to_numeric(steps["long_notional"], errors="coerce") - pd.to_numeric(steps["short_notional"], errors="coerce")
+        steps["gross_leverage"] = gross / equity.where(equity > 0)
+        if gross_leverage and gross_leverage > 0:
+            # Binance initial margin is notional / leverage; share of equity locked as margin.
+            steps["margin_used_pct"] = gross / gross_leverage / equity.where(equity > 0) * 100.0
+    if len(steps) > max_points:
+        step = int(math.ceil(len(steps) / max_points))
+        keep = set(range(0, len(steps), step)) | {len(steps) - 1}
+        keep |= set(np.flatnonzero(steps["state"].ne(steps["state"].shift()).to_numpy()))  # keep state switches
+        steps = steps.iloc[sorted(keep)]
+    return steps.reset_index(drop=True), events.reset_index(drop=True)
+
+
+def frame_state_spans(frame: pd.DataFrame, time_col: str = "timestamp") -> list[tuple]:
+    if frame.empty:
+        return []
+    return state_spans(frame.rename(columns={time_col: "time"}))
+
+
 # ------------------------------------------------------------ live runner
 def tail_lines(path: str | Path, max_lines: int, block: int = 1 << 16) -> list[str]:
     """Last ``max_lines`` lines of a file without reading all of it."""
@@ -314,6 +471,7 @@ def audit_frame(records: list[dict]) -> pd.DataFrame:
         if not isinstance(engine, dict):
             continue
         long_, short = _side_notional(record)
+        totals = record.get("engine_totals") or {}
         orders = record.get("orders") or []
         submitted = record.get("submitted") or []
         equity = _num(record.get("binance_equity"))
@@ -328,6 +486,15 @@ def audit_frame(records: list[dict]) -> pd.DataFrame:
             "state": engine.get("state", ""),
             "equity": equity,
             "available": _num(record.get("binance_available_balance")),
+            # Exact engine running totals (runner writes them since the dashboard was
+            # added); NaN for older audit lines, which fall back to an estimate below.
+            "total_cost": _num(totals.get("total_cost")),
+            "total_funding": _num(totals.get("total_funding")),
+            "shadow_long_notional": _num(totals.get("shadow_long_notional")),
+            "shadow_short_notional": _num(totals.get("shadow_short_notional")),
+            # Estimate for old lines: cost is a fraction of the cycle's start equity.
+            "cost_estimate_usd": _num(engine.get("cost")) * (equity if not math.isnan(equity) else _num(engine.get("equity")))
+                                 if engine.get("state") == "LIVE" else 0.0,
             "engine_equity": _num(engine.get("equity")),
             "shadow_equity": _num(engine.get("shadow_equity")),
             "net_return": _num(engine.get("net_return")),
@@ -349,7 +516,53 @@ def audit_frame(records: list[dict]) -> pd.DataFrame:
     if frame.empty:
         return frame
     frame["time"] = pd.to_datetime(frame["time"], utc=True, format="ISO8601", errors="coerce")
-    return frame.dropna(subset=["time"]).sort_values("time", kind="stable").reset_index(drop=True)
+    # audit.jsonl is written in cycle order. A new-signal cycle is stamped with the
+    # signal bar's *open* time, which is earlier than the poll cycles just before
+    # it, so sorting would shuffle cycles; keep file order and a monotone clock.
+    frame = frame.dropna(subset=["time"]).reset_index(drop=True)
+    frame["time"] = frame["time"].cummax()
+    exact = frame["total_cost"].notna()
+    frame["cost_exact"] = exact
+    if exact.all():
+        # Costs inside the loaded window, from the engine's own running totals.
+        first = frame.iloc[0]
+        frame["cum_cost_usd"] = frame["total_cost"] - first["total_cost"]
+        frame["cum_funding_paid_usd"] = -(frame["total_funding"] - first["total_funding"])
+    else:
+        frame["cum_cost_usd"] = pd.to_numeric(frame["cost_estimate_usd"], errors="coerce").fillna(0.0).cumsum()
+        frame["cum_funding_paid_usd"] = 0.0
+    gross = frame["long_notional"] + frame["short_notional"]
+    frame["gross_leverage"] = gross / frame["equity"].where(frame["equity"] > 0)
+    # Binance's own view of locked margin: NAV minus what is still free.
+    frame["margin_used"] = frame["equity"] - frame["available"]
+    frame["margin_used_pct"] = frame["margin_used"] / frame["equity"].where(frame["equity"] > 0) * 100.0
+    return frame
+
+
+def risk_config(latest: dict | None) -> dict[str, Any]:
+    """Risk settings the runner recorded in ``engine_totals.config`` (empty for old runs)."""
+    return dict(((latest or {}).get("engine_totals") or {}).get("config") or {})
+
+
+def recovery_progress(engine_state: dict | None, min_periods: int, positive_periods: int,
+                      recovery_pnl_pct: float) -> dict[str, Any]:
+    """How far a SHADOW book is from the three recovery conditions."""
+    state = engine_state or {}
+    shadow_equity = _num(state.get("shadow_equity"))
+    periods = int(_num(state.get("shadow_periods")) or 0) if not math.isnan(_num(state.get("shadow_periods"))) else 0
+    positive = int(_num(state.get("shadow_positive_periods")) or 0) if not math.isnan(_num(state.get("shadow_positive_periods"))) else 0
+    pnl_pct = (shadow_equity - 1.0) * 100.0 if not math.isnan(shadow_equity) else math.nan
+    blocked = "__ACCOUNT__" in (state.get("blocked_symbols") or {})
+    checks = {
+        "periods": (periods, min_periods, periods >= min_periods),
+        "positive_periods": (positive, positive_periods, positive >= positive_periods),
+        "shadow_pnl_pct": (pnl_pct, recovery_pnl_pct * 100.0,
+                           not math.isnan(pnl_pct) and pnl_pct >= recovery_pnl_pct * 100.0),
+        "account_not_halted": (not blocked, True, not blocked),
+    }
+    return {"state": state.get("state", ""), "checks": checks,
+            "ready": all(ok for _, _, ok in checks.values()),
+            "shadow_positions": state.get("shadow_positions") or {}}
 
 
 def event_frame(audit: pd.DataFrame, records: list[dict]) -> pd.DataFrame:
@@ -521,6 +734,7 @@ def live_summary(latest: dict | None, engine_state: dict | None, latest_mtime: f
         "blocked_symbols": state.get("blocked_symbols") or {},
         "total_cost": _num(state.get("total_cost")),
         "total_funding": _num(state.get("total_funding")),
+        "funding_paid": -_num(state.get("total_funding")),
         "shadow_periods": state.get("shadow_periods"),
         "shadow_positive_periods": state.get("shadow_positive_periods"),
     }

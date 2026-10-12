@@ -273,6 +273,8 @@ class LiveRunner:
             "engine": result, "targets": targets, "orders": plan,
             "submitted": submitted, "exchange_positions": exchange_positions,
             **extra,
+            # Read-only snapshot for monitoring (the dashboard); nothing reads it back.
+            "engine_totals": self._engine_totals(),
         }
         (cfg.output / "latest.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         with (cfg.output / "audit.jsonl").open("a", encoding="utf-8") as handle:
@@ -282,6 +284,29 @@ class LiveRunner:
                                     encoding="utf-8")
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return payload
+
+    def _engine_totals(self) -> dict[str, Any]:
+        """Exact running totals and SHADOW recovery settings, for monitoring only."""
+        e, c = self.engine, self.engine.config
+        return {
+            "total_cost": e.total_cost, "total_funding": e.total_funding,
+            "peak_equity": e.peak_equity, "day_open_equity": e.day_open_equity,
+            "shadow_equity": e.shadow_equity, "shadow_periods": e.shadow_periods,
+            "shadow_positive_periods": e.shadow_positive_periods,
+            "shadow_entries": e.shadow_entries, "shadow_exits": e.shadow_exits,
+            "shadow_long_notional": sum(p.notional for p in e.shadow_positions.values() if p.notional > 0),
+            "shadow_short_notional": -sum(p.notional for p in e.shadow_positions.values() if p.notional < 0),
+            "config": {
+                "gross_leverage": c.gross_leverage, "margin_buffer_pct": c.margin_buffer_pct,
+                "fee_bps": c.fee_bps, "slippage_bps": c.slippage_bps,
+                "per_symbol_stop_loss_pct": c.per_symbol_stop_loss_pct,
+                "daily_stop_loss_pct": c.daily_stop_loss_pct,
+                "portfolio_drawdown_pct": c.portfolio_drawdown_pct,
+                "shadow_min_periods": c.shadow_min_periods,
+                "shadow_positive_periods": c.shadow_positive_periods,
+                "shadow_recovery_pnl_pct": c.shadow_recovery_pnl_pct,
+            },
+        }
 
     # ------------------------------------------------------------------- loop
     def _sleep(self, seconds: float) -> None:

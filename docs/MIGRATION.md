@@ -70,3 +70,4 @@
 - **Anycast 脚本**：节点号校验改为整串匹配（原来的写法只检查第一个字符，而这个脚本以 root 运行）；安装脚本不再写死用户主目录。
 - **导出警告**：`utc_close`、`funding_event`、`horizon > 1` 这几种跨多根 bar 的标签，导出时会提示 Rust 组合收益会被重复计算。
 - **依赖整理**：`features/frame.py` 不再导入 torch，所以只做回测和实盘不需要安装 torch。
+- **监控字段**：runner 的每条 audit 记录增加只读字段 `engine_totals`；Shadow 回放输出累计成本和仓位列。这些只用于看板，不参与交易逻辑。golden 测试会先去掉 `engine_totals`，其余内容仍要求与原版逐字节一致。

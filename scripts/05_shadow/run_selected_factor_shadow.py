@@ -135,6 +135,24 @@ def _config(args) -> EngineConfig:
     )
 
 
+def _annotate(row: dict, e: Engine) -> dict:
+    """Output-only columns for the dashboard; they never feed back into the engine.
+
+    ``total_cost``/``total_funding`` are the engine's cumulative live-book
+    dollars (exact, unlike rebuilding them from per-row fractions); the
+    notionals are the live and shadow books after this row.
+    """
+    def sides(book):
+        long_ = sum(p.notional for p in book.values() if p.notional > 0)
+        short = -sum(p.notional for p in book.values() if p.notional < 0)
+        return long_, short
+    row["total_cost"], row["total_funding"] = e.total_cost, e.total_funding
+    row["long_notional"], row["short_notional"] = sides(e.positions)
+    row["shadow_long_notional"], row["shadow_short_notional"] = sides(e.shadow_positions)
+    row["shadow_periods"], row["shadow_positive_periods"] = e.shadow_periods, e.shadow_positive_periods
+    return row
+
+
 def run_one(pred_path, market, args):
     bars_by_ts, mark_times, marks = market
     frame = pd.read_csv(pred_path)
@@ -150,7 +168,7 @@ def run_one(pred_path, market, args):
                               args.long_pct, args.short_pct)
         row = e.step(ts, signals, bars_by_ts[ts])
         row["kind"] = "step"
-        rows.append(row)
+        rows.append(_annotate(row, e))
         if not mark_times:
             continue
         # Intrabar risk marks until the next step's bar close.
@@ -164,7 +182,7 @@ def run_one(pred_path, market, args):
             row = e.mark(_key(when), marks[when])   # same timestamp format as step rows
             if row["risk_events"]:
                 row["kind"] = "mark"
-                rows.append(row)
+                rows.append(_annotate(row, e))
     return e, rows
 
 
@@ -190,6 +208,16 @@ def metrics(e: Engine, rows: list[dict], args) -> dict:
         "final_state": e.state, "shadow_entries": e.shadow_entries,
         "shadow_exits": e.shadow_exits, "shadow_equity": e.shadow_equity,
     }
+
+
+def _run_config(args) -> dict:
+    """Settings recorded next to the results so the dashboard can show margin use and recovery rules."""
+    keys = ("initial_equity", "gross_leverage", "margin_buffer_pct", "long_pct", "short_pct", "symbol_stop",
+            "symbol_take", "daily_stop", "daily_take", "portfolio_drawdown", "shadow_min_periods",
+            "shadow_positive_periods", "shadow_recovery_pnl_pct", "fee_bps", "slippage_bps", "mark_minutes")
+    config = {key: getattr(args, key) for key in keys}
+    config["funding"] = not args.no_funding
+    return config
 
 
 def _rebalance_bars(hours: float) -> int:
@@ -254,7 +282,8 @@ def main():
                     w = csv.DictWriter(f, fieldnames=fields)
                     w.writeheader()
                     w.writerows(rows)
-            meta = {"factor_id": factor, "rebalance_hours": hours, **metrics(e, rows, args)}
+            meta = {"factor_id": factor, "rebalance_hours": hours, **metrics(e, rows, args),
+                    "config": _run_config(args)}
             (root / f"{factor}.metrics.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
             summary.append(meta)
             if i % 25 == 0:

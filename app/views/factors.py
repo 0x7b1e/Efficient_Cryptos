@@ -132,7 +132,7 @@ tab_objs = st.tabs(tabs)
 # ------------------------------------------------------------------ leaderboard
 with tab_objs[0]:
     columns = ["factor_id", "rebalance", "return_pct", "sharpe", "max_drawdown_pct", "avg_turnover",
-               "total_cost", "signed_q10_minus_q1"]
+               "total_cost", "cost_pct_of_equity", "cost_share_of_gross_pct", "signed_q10_minus_q1"]
     if has_test:
         columns += ["test_return_pct", "test_sharpe", "test_max_drawdown_pct"]
     if "block" in view:
@@ -147,6 +147,11 @@ with tab_objs[0]:
         "max_drawdown_pct": st.column_config.NumberColumn("最大回撤%", format="%.2f"),
         "avg_turnover": st.column_config.NumberColumn("平均换手", format="%.3f"),
         "total_cost": st.column_config.NumberColumn("总成本", format="%.1f"),
+        "cost_pct_of_equity": st.column_config.NumberColumn("成本占本金%", format="%.2f",
+                                                            help="手续费 + 滑点 / 初始资金"),
+        "cost_share_of_gross_pct": st.column_config.NumberColumn(
+            "成本吃掉毛收益%", format="%.0f",
+            help="手续费 + 滑点 / 扣成本前的收益。毛收益为负时留空。超过 50% 说明换手太高，换成更慢的调仓周期试试"),
         "signed_q10_minus_q1": st.column_config.NumberColumn("Q10−Q1 (每bar)", format="%.2e"),
         "test_return_pct": st.column_config.NumberColumn("测试收益%", format="%.2f"),
         "test_sharpe": st.column_config.NumberColumn("测试 Sharpe", format="%.2f"),
@@ -308,5 +313,42 @@ with right:
         fig.update_layout(height=230, margin={"l": 10, "r": 10, "t": 30, "b": 10},
                           title="Q1 / Q10 累计超额收益 %", legend={"orientation": "h", "y": -0.25})
         st.plotly_chart(fig, width="stretch")
+
+# ------------------------------------------------------------------ cost breakdown
+st.markdown("##### 成本拆解")
+curves, costs = d.rust_costs(_ts(row["timeseries_path"], _mtime(row["timeseries_path"])))
+test_costs = {}
+if has_test and isinstance(row.get("test_timeseries_path"), str):
+    _, test_costs = d.rust_costs(_ts(row["test_timeseries_path"], _mtime(row["test_timeseries_path"])))
+if not costs:
+    st.caption("没有 timeseries.csv，无法拆解成本")
+else:
+    c = st.columns(6)
+    c[0].metric("扣成本前收益", fmt_num(costs["gross_return_pct"], 2, "%"))
+    c[1].metric("手续费 + 滑点", fmt_num(-costs["cost_pct_of_equity"], 2, "%"))
+    c[2].metric("资金费", fmt_num(-costs["funding_pct_of_equity"], 2, "%"), help="负数表示净支付资金费")
+    c[3].metric("净收益", fmt_num(costs["net_return_pct"], 2, "%"))
+    c[4].metric("成本吃掉毛收益", fmt_num(costs["cost_share_of_gross_pct"], 0, "%"),
+                help="(手续费 + 滑点 + 资金费) / 扣成本前收益；毛收益为负时不显示")
+    c[5].metric("年化换手", fmt_num(costs.get("annual_turnover"), 0, "x"),
+                help="每年交易的名义金额是组合规模的多少倍")
+    if test_costs:
+        st.caption(f"测试期：扣成本前 {fmt_num(test_costs['gross_return_pct'], 2, '%')}，"
+                   f"成本 {fmt_num(-test_costs['cost_pct_of_equity'], 2, '%')}，"
+                   f"资金费 {fmt_num(-test_costs['funding_pct_of_equity'], 2, '%')}，"
+                   f"净 {fmt_num(test_costs['net_return_pct'], 2, '%')}")
+    thin = curves.iloc[:: max(1, len(curves) // 3000)]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=thin["timestamp"], y=thin["gross_pnl"], name="扣成本前", line={"color": "#2563eb"}))
+    fig.add_trace(go.Scatter(x=thin["timestamp"], y=thin["net_pnl"], name="净收益", line={"color": "#111827", "width": 2}))
+    fig.add_trace(go.Scatter(x=thin["timestamp"], y=-thin["cost"], name="累计手续费+滑点", fill="tozeroy",
+                             line={"color": DOWN, "width": 1}))
+    fig.add_trace(go.Scatter(x=thin["timestamp"], y=-thin["funding_paid"], name="累计资金费",
+                             line={"color": "#f59e0b", "width": 1}))
+    fig.update_layout(height=320, margin={"l": 10, "r": 10, "t": 30, "b": 10}, yaxis_title="USDT",
+                      title="累计盈亏拆解（训练期）", legend={"orientation": "h", "y": -0.2})
+    st.plotly_chart(fig, width="stretch")
+    st.caption("Rust 回测按固定杠杆持仓，没有风控状态机，所以这里没有 SHADOW。"
+               "带 SHADOW 的回测结果见左侧的「Shadow 回放」页。")
 
 st.caption(f"数据来源：{rel(train_root)}" + (f"，对照期：{rel(test_root)}" if has_test else ""))

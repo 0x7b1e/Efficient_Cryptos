@@ -42,6 +42,12 @@ refresh = st.sidebar.selectbox("自动刷新", [0, 15, 30, 60, 300], index=2,
                                format_func=lambda s: "关闭" if s == 0 else f"每 {s} 秒")
 stale_minutes = st.sidebar.number_input("超过多少分钟没更新算异常", value=10, min_value=1,
                                         help="设成 poll 间隔的 2–3 倍")
+with st.sidebar.expander("SHADOW 恢复条件（旧版 audit 用）"):
+    shadow_defaults = (
+        st.number_input("最少周期", value=3, min_value=0),
+        st.number_input("盈利周期", value=2, min_value=0),
+        st.number_input("影子收益阈值", value=0.01, step=0.005, format="%.3f"),
+    )
 if st.sidebar.button("重新查找目录"):
     st.cache_data.clear()
 
@@ -91,7 +97,42 @@ def render() -> None:
     k[4].metric("总杠杆", fmt_num(summary["gross_leverage"], 2, "x"))
     k[5].metric("净敞口 / 总敞口", fmt_num(summary["net_exposure_pct"], 1, "%"),
                 help="(多头 − 空头) / (多头 + 空头)。美元中性时接近 0；单边止损后会偏离")
-    k[6].metric("累计成本 / 资金费", f"{fmt_num(summary['total_cost'], 1)} / {fmt_num(summary['total_funding'], 1)}")
+    k[6].metric("累计成本", fmt_num(summary["total_cost"], 2),
+                help="引擎按 手续费 + 滑点 模型累计的实盘账本成本（自本次运行开始）")
+
+    # ---------------------------------------------------------- SHADOW
+    cfg = d.risk_config(latest)
+    with st.expander("SHADOW 状态与恢复条件", expanded=summary["state"] == "SHADOW"):
+        min_p = int(cfg.get("shadow_min_periods", shadow_defaults[0]))
+        pos_p = int(cfg.get("shadow_positive_periods", shadow_defaults[1]))
+        rec = float(cfg.get("shadow_recovery_pnl_pct", shadow_defaults[2]))
+        progress = d.recovery_progress(engine_state, min_p, pos_p, rec)
+        if not cfg:
+            st.caption("这次运行的 audit 没有记录风控参数（旧版本 runner），恢复条件使用左侧栏的设置。")
+        names = {"periods": "SHADOW 周期数", "positive_periods": "其中盈利的周期数",
+                 "shadow_pnl_pct": "影子账本累计收益 %", "account_not_halted": "账户未被日内止损冻结"}
+        rows = []
+        for key, (value, need, ok) in progress["checks"].items():
+            shown = fmt_num(value, 2) if isinstance(value, float) else ("是" if value is True else "否" if value is False else value)
+            target = (f"≥ {fmt_num(need, 2)}" if isinstance(need, float) else
+                      "是" if need is True else f"≥ {need}")
+            rows.append({"条件": names[key], "当前": shown, "要求": target, "满足": "✅" if ok else "⏳"})
+        cols = st.columns([3, 2])
+        cols[0].dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        with cols[1]:
+            st.metric("影子账本净值", fmt_num((engine_state or {}).get("shadow_equity"), 4),
+                      help="进入 SHADOW 时重置为 1.0；之后按信号模拟交易（含成本）")
+            st.metric("进入 / 恢复次数", f"{(engine_state or {}).get('shadow_entries', 0)} / {(engine_state or {}).get('shadow_exits', 0)}")
+        if summary["state"] == "SHADOW":
+            st.markdown("**结论：** " + ("下一个调仓周期结束时满足全部条件即恢复 LIVE。" if progress["ready"]
+                                          else "尚未满足恢复条件，实盘保持空仓。"))
+        shadow_book = progress["shadow_positions"]
+        if shadow_book:
+            book = pd.DataFrame([{"币种": sym, "方向": "LONG" if pos.get("notional", 0) > 0 else "SHORT",
+                                  "名义价值": pos.get("notional"), "开仓价": pos.get("entry_price"),
+                                  "标记价": pos.get("mark_price")} for sym, pos in shadow_book.items()])
+            st.markdown("影子账本持仓（只在模拟中，不会下单）")
+            st.dataframe(book, hide_index=True, width="stretch")
 
     # ---------------------------------------------------------- positions
     positions = d.positions_frame(latest, engine_state)
@@ -162,6 +203,40 @@ def render() -> None:
                           legend={"orientation": "h", "y": -0.12})
         st.plotly_chart(fig, width="stretch")
         st.caption("橙色背景为 SHADOW 时段。影子账本是风控触发后的模拟净值，用来判断何时恢复实盘。")
+
+        # ------------------------------------------------------ costs and margin
+        st.markdown("##### 成本与保证金占用")
+        window_net = float(audit["equity"].iloc[-1] - audit["equity"].iloc[0])
+        window_cost = float(audit["cum_cost_usd"].iloc[-1])
+        window_funding = float(audit["cum_funding_paid_usd"].iloc[-1])
+        window_gross = window_net + window_cost + window_funding
+        c = st.columns(6)
+        c[0].metric("窗口内手续费 + 滑点", fmt_num(window_cost, 2))
+        c[1].metric("窗口内资金费", fmt_num(window_funding, 2), help="正数表示付出，负数表示收到")
+        c[2].metric("成本吃掉毛收益", fmt_num((window_cost + window_funding) / window_gross * 100 if window_gross > 0 else float("nan"), 0, "%"),
+                    help="窗口内 (成本 + 资金费) / 扣成本前盈亏。毛盈亏为负时不显示。窗口内有出入金时不准确")
+        margin_now = audit["margin_used_pct"].iloc[-1]
+        c[3].metric("当前保证金占用", fmt_num(margin_now, 1, "%"), help="(账户权益 − 可用余额) / 账户权益，来自 Binance")
+        c[4].metric("窗口内最大占用", fmt_num(audit["margin_used_pct"].max(), 1, "%"))
+        c[5].metric("当前总杠杆", fmt_num(audit["gross_leverage"].iloc[-1], 2, "x"))
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(go.Scatter(x=audit["time"], y=audit["cum_cost_usd"], name="累计手续费+滑点",
+                                 line={"color": DOWN, "width": 1.4}))
+        fig.add_trace(go.Scatter(x=audit["time"], y=audit["cum_funding_paid_usd"], name="累计资金费（付出为正）",
+                                 line={"color": "#a16207", "width": 1.2}))
+        if audit["margin_used_pct"].notna().any():
+            fig.add_trace(go.Scatter(x=audit["time"], y=audit["margin_used_pct"], name="保证金占用%",
+                                     line={"color": "gray", "dash": "dot"}), secondary_y=True)
+        for start, end, state in d.state_spans(audit):
+            if state == "SHADOW":
+                fig.add_vrect(x0=start, x1=end, fillcolor=SHADOW, opacity=0.15, line_width=0)
+        fig.update_yaxes(title_text="USDT", secondary_y=False)
+        fig.update_yaxes(title_text="保证金%", secondary_y=True, showgrid=False, rangemode="tozero")
+        fig.update_layout(height=300, margin={"l": 10, "r": 10, "t": 20, "b": 10}, legend={"orientation": "h", "y": -0.2})
+        st.plotly_chart(fig, width="stretch")
+        st.caption(("成本取自引擎的精确累计值（手续费 + 滑点模型，和回测相同口径）。" if audit["cost_exact"].all()
+                    else "旧版本 runner 的 audit 没有累计值，成本按每周期比例估算，资金费不可用。")
+                   + "Binance 实际扣的手续费可能因 VIP 等级、BNB 抵扣而不同；保证金占用直接来自 Binance。")
 
     # ---------------------------------------------------------- events / orders / errors
     events = d.event_frame(audit, records)

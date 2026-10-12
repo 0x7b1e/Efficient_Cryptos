@@ -67,6 +67,8 @@ def fmt_num(value, digits: int = 2, suffix: str = "") -> str:
         return "—"
     if not math.isfinite(value):
         return "—"
+    if abs(value) < 0.5 * 10 ** -digits:
+        value = 0.0  # no "-0.00"
     return f"{value:,.{digits}f}{suffix}"
 
 

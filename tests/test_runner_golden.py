@@ -8,6 +8,7 @@ crash (stop-loss -> SHADOW -> flatten), an order lost to a disconnect
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -62,11 +63,37 @@ def _run(which: str, out: Path, monkeypatch, argv: list[str], *, hours: float, s
     return {name: (out / name).read_text() if (out / name).exists() else "" for name in FILES}
 
 
+# Monitoring-only fields the restructured runner adds to each payload. They are
+# removed before the byte-for-byte comparison; everything else must match.
+NEW_PAYLOAD_KEYS = ("engine_totals",)
+
+
+def _without_new_keys(name: str, text: str) -> str:
+    if name == "audit.jsonl":
+        lines = []
+        for line in text.splitlines():
+            record = json.loads(line)
+            for key in NEW_PAYLOAD_KEYS:
+                record.pop(key, None)
+            lines.append(json.dumps(record, ensure_ascii=False))
+        return "".join(line + "\n" for line in lines)
+    if name == "latest.json":
+        record = json.loads(text)
+        for key in NEW_PAYLOAD_KEYS:
+            record.pop(key, None)
+        return json.dumps(record, indent=2, ensure_ascii=False)
+    return text
+
+
 def _compare(tmp_path, monkeypatch, argv, **kwargs):
     old = _run("legacy", tmp_path / "legacy", monkeypatch, argv, **kwargs)
     new = _run("new", tmp_path / "new", monkeypatch, argv, **kwargs)
     for name in FILES:
-        assert new[name] == old[name], f"{name} differs between legacy and restructured runner"
+        assert _without_new_keys(name, new[name]) == old[name], \
+            f"{name} differs between legacy and restructured runner"
+    if "audit.jsonl" in FILES:
+        assert all("engine_totals" in json.loads(line) for line in new["audit.jsonl"].splitlines()
+                   if '"engine"' in line)
     return new
 
 

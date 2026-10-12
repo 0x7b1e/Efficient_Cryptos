@@ -87,3 +87,7 @@ python scripts/05_shadow/paper_replay.py --signals signals.csv --bars bars.csv -
 - 回放按 bar 收盘价或 1m 均价瞬间成交；实盘要等下一次轮询，并且用市价单成交。
 - 如果 prediction 来自主网数据，而实盘跑在 Testnet，因子输入（尤其是成交量）会有明显差异。
 - 历史回放结果见 `docs/results/`。
+
+## 看板
+
+回放的 `timeseries.csv` 还会输出几列只用于展示的数据：`total_cost`、`total_funding`（引擎的精确累计值）、多空名义价值、SHADOW 周期计数；`metrics.json` 会记录这次回放的参数 `config`。这些都不参与交易逻辑。在看板的「Shadow 回放」页可以查看 SHADOW 切换、成本和保证金占用，见 [12 可视化看板](12_dashboard.md)。
