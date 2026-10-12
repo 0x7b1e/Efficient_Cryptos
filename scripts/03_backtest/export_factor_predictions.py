@@ -14,6 +14,7 @@ import json
 import multiprocessing as mp
 import re
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -109,13 +110,24 @@ def main() -> int:
     symbols = tuple(s.strip().upper() for s in args.symbols.split(",") if s.strip())
     if not symbols:
         ap.error("--symbols must contain at least one symbol")
+    print(f"loading features: {len(symbols)} symbols, interval={args.interval}, days={args.days} "
+          f"(first run for a new symbol set rebuilds the cache under {args.data_dir}/features/, "
+          "which can take several minutes)", flush=True)
+    t0 = time.time()
     frame, _ = load_feature_frame(
         args.data_dir, symbols, interval=args.interval, horizon=args.horizon,
         days=args.days, require_positioning=False, cache=True,
         rebuild_cache=args.rebuild_cache, layered_cache=True,
         label_mode=args.label_mode,
     )
+    print(f"features loaded in {time.time() - t0:.0f}s: {len(frame)} rows", flush=True)
     frame = _slice(frame, args.train_start, args.train_end)
+    if frame.empty:
+        print(f"ERROR: no rows between --train-start {args.train_start} and --train-end {args.train_end}; "
+              "check --days and the data coverage", flush=True)
+        return 1
+    ts = pd.to_datetime(frame["timestamp"], utc=True)
+    print(f"window {ts.min()} -> {ts.max()}: {len(frame)} rows, {frame['symbol'].nunique()} symbols", flush=True)
     if args.label_mode != "horizon" or args.horizon != 1:
         # Layer/IC statistics are fine; only the Rust *portfolio* PnL is affected.
         print(f"WARNING: label {args.label_mode} (horizon={args.horizon}) spans several bars, but the Rust "
@@ -163,6 +175,7 @@ def main() -> int:
                 manifest.extend(existing_manifest)
         except (OSError, ValueError):
             pass
+    print(f"evaluating {len(tasks)} factors with jobs={args.jobs} backend={args.backend}", flush=True)
     failures = []
     if args.jobs == 1:
         results = (_export_one(task) for task in tasks)
