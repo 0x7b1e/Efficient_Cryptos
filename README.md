@@ -90,7 +90,7 @@ python scripts/06_live/run_live.py \
 
 | Stage | Doc | Main entry points |
 |---|---|---|
-| Data | [docs/01_data.md](docs/01_data.md) | `scripts/01_data/download_data.py` |
+| Data | [docs/01_data.md](docs/01_data.md) | `scripts/01_data/download_data.py`, `kline_correlation.py` (universe selection) |
 | Factor mining | [docs/02_factor_mining.md](docs/02_factor_mining.md) | `scripts/02_mining/generate_factors.py`, `audit_factor_lookahead.py` |
 | Backtest | [docs/03_backtest.md](docs/03_backtest.md) | `export_factor_predictions.py`, `sweep_rust_rebalance.sh` |
 | Selection | [docs/04_selection.md](docs/04_selection.md) | `scan_rust_factors.py`, `analyze_factor_correlation.py` |
