@@ -23,7 +23,8 @@ mining = ["openai>=1.30"]                 # LLM factor generation
 ml = ["torch>=2.0", "tensorboard>=2.12", "lightgbm>=4.0"]
 kol = ["twscrape>=0.20.1", "openai>=1.30"]   # see efficient_cryptos/kol
 test = ["pytest>=7"]
-all = ["efficient-cryptos[mining,ml,kol,test]"]
+ui = ["streamlit>=1.50", "plotly>=5.18"]   # read-only dashboard in app/
+all = ["efficient-cryptos[mining,ml,kol,ui,test]"]
 
 [tool.setuptools.packages.find]
 include = ["efficient_cryptos*"]

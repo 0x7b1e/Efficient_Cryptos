@@ -39,6 +39,8 @@ efficient_cryptos/            Python package (dependencies flow top to bottom)
 ├── execution/                Binance adapter, live runner, signal sources, exchange-side risk control
 ├── ml/                       ResNet / GRU / MLP / LightGBM (optional torch dependency)
 ├── kol/  meme/               KOL social factors, Meme event strategies (optional)
+├── dashboard/                Data access layer for the dashboard (read-only)
+app/                          Streamlit dashboard: factor leaderboard, live monitor (docs/12)
 rust_backtest/                Rust cross-sectional backtest core
 scripts/01_data … 11_dex/     Command-line entry points for each stage
 config/                       default.yaml, KOL/Meme configs
@@ -101,6 +103,7 @@ python scripts/06_live/run_live.py \
 | KOL social factors | [docs/09_kol.md](docs/09_kol.md) | `scripts/09_kol/` |
 | Meme events | [docs/10_meme_event.md](docs/10_meme_event.md) | `scripts/10_meme/` |
 | DEX | [docs/11_dex.md](docs/11_dex.md) | `generate_dex_factors.py` |
+| Dashboard | [docs/12_dashboard.md](docs/12_dashboard.md) | `streamlit run app/streamlit_app.py` |
 | Legacy repo mapping | [docs/MIGRATION.md](docs/MIGRATION.md) | |
 
 ## Research discipline
