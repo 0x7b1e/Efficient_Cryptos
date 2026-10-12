@@ -1,0 +1,20 @@
+universe:
+  top_n: 200
+  min_quote_volume_24h: 1000000
+  exclude_major: true
+  min_listing_days: 7
+
+event:
+  min_event_percentile: 0.95
+  min_volume_shock: 0.50
+  min_abs_return_5m: 0.01
+
+cooldown:
+  minutes: 15
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.30
+  min_volume_shock: 0.20
+
+data:
+  bar_interval: 1m
+  labels: [1, 5, 10, 30]

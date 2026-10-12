@@ -1,0 +1,21 @@
+# Replace these examples with explicitly approved accounts.
+kol:
+  - handle: example_kol
+    weight: 1.0
+    tags: [macro]
+  - handle: example_onchain
+    weight: 0.8
+    tags: [onchain]
+
+collection:
+  interval_minutes: 15
+  search_limit_per_kol: 100
+  exclude_retweets: true
+  language: en
+
+scoring:
+  half_life_hours: 12.0
+  relevance_threshold: 0.50
+  engagement_log_scale: true
+  novelty_weight: 0.0
+  hype_weight: 0.0

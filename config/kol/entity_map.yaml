@@ -1,0 +1,6 @@
+# Keep aliases unambiguous. Cashtags are handled automatically.
+entities:
+  BTCUSDT: [bitcoin, btc, bitcoinusdt]
+  ETHUSDT: [ethereum, ether, eth, ethereumusdt]
+  SOLUSDT: [solana, sol, solanausdt]
+  DOGEUSDT: [dogecoin, doge, dogeusdt]

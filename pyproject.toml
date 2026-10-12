@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "efficient-cryptos"
+version = "1.0.0"
+description = "Binance USD-M factor research, Rust backtests and a risk-managed live engine"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=12.0",
+    "pyyaml>=6.0",
+    "requests>=2.28",
+    "matplotlib>=3.6",
+    "scipy>=1.10",
+    "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+mining = ["openai>=1.30"]                 # LLM factor generation
+ml = ["torch>=2.0", "tensorboard>=2.12", "lightgbm>=4.0"]
+kol = ["twscrape>=0.20.1", "openai>=1.30"]   # see efficient_cryptos/kol
+test = ["pytest>=7"]
+all = ["efficient-cryptos[mining,ml,kol,test]"]
+
+[tool.setuptools.packages.find]
+include = ["efficient_cryptos*"]
+
+[tool.setuptools.package-data]
+"efficient_cryptos.mining" = ["prompts/*/*.md"]
+"efficient_cryptos.factors" = ["popbo_alphas/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

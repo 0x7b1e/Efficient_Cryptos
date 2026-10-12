@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "universe_type": "dynamic_non_major_usdt_futures",
+  "symbols": [
+    "1000PEPEUSDT",
+    "PUMPUSDT",
+    "TRUMPUSDT",
+    "WIFUSDT",
+    "BONKUSDT",
+    "FLOKIUSDT",
+    "MEMEUSDT"
+  ]
+}

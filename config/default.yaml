@@ -1,0 +1,88 @@
+# ===================== Global settings =====================
+# Shared by data downloads, training, and backtests for reproducibility.
+# Adjust leverage, target volatility, and universe sizing here.
+
+general:
+  quote_asset: USDT          # Trade USDT-quoted pairs only
+  leverage: 2                # Leverage used for sizing and margin usage
+  initial_cash: 10000      # Backtest starting capital (USDT)
+  data_dir: data             # Local data root
+
+# ------------- Backtest and live execution constraints -------------
+execution:
+  margin_type: CROSSED        # Futures margin mode used by the live executor
+  position_side_mode: AUTO    # Detect one-way (BOTH) vs dual-side (HEDGE) before live orders
+  min_equity_usdt: 10.0       # Do not open new live positions below this equity
+  available_margin_buffer_pct: 0.10 # Keep 10% free margin for fees/rounding/maintenance
+  round_up_min_notional: true # Round up to exchange min notional when needed
+  max_round_up_pct: 0.25      # Maximum allowed uplift vs target notional
+  enable_exchange_stop_orders: false   # Simulate stop orders during backtests
+  maintenance_margin_rate: 0.005       # Simplified liquidation threshold
+  symbol_map: {}              # Optional signal-symbol to execution-symbol mapping
+
+# ------------- Universe / liquidity filter -------------
+universe:
+  top_n: 40                  # Trade only the top N names by quote volume
+  min_quote_volume_usdt: 5000000   # 24h quote volume floor (USDT)
+  exclude: ["USDCUSDT", "BUSDUSDT", "FDUSDUSDT", "TUSDUSDT", "EURUSDT", "XAUUSDT", "XAGUSDT"]
+
+# ------------- Portfolio risk / Alpha scanning -------------
+portfolio:
+  bar_min: 30                # Unified live/research bar size
+  target_vol_annual: 0.4    # Target annualized portfolio volatility
+  gross_leverage_cap: 3.0    # Gross leverage cap
+  max_symbol_weight: 0.25    # Per-symbol weight cap
+
+# Signal lifecycle shared by ML, Alpha, backtest and execution.
+# Both values are measured in the model/strategy bar (30m by default).
+signal_policy:
+  interval_bars: 1            # Generate a new signal every N closed bars
+  hold_bars: 1                # Flatten after N bars unless a new signal arrives
+  flatten_on_expiry: true
+
+# ------------- Backtest and live risk controls -------------
+risk:
+  enabled: true
+  daily_halt_enabled: true          # Testnet-only override may disable account circuit breakers
+  per_symbol_stop_loss_pct: 0.05    # Close at -5% from exchange entry/opening node
+  take_profit_pct: 0.30             # Close at +30% from exchange entry/opening node
+  take_profit_block_for_day: true   # Do not reopen after TP until the daily reset
+  daily_stop_loss_pct: 0.05         # Flatten account at -5% from the daily opening NAV
+  daily_take_profit_pct: 0.30       # Flatten account at +30% from the daily opening NAV
+  total_drawdown_pct: 0.20          # Stop trading for the day after a 20% intraday drawdown
+  daily_reset_utc_offset_hours: 8   # Reset daily risk at UTC+8 midnight
+  state_file: data/live_risk_state.json # run_live.py --exchange-risk-config stores it in <output>/exchange_risk_state.json instead
+
+# Legacy section. The live runner enables this behaviour with --manual-guard
+# (state in <output>/manual_guard_state.json) and resumes with --reset-manual-halt.
+manual_close_halt:
+  enabled: true
+  state_file: data/manual_close_guard_state.json
+
+# ------------- Restored Alpha live scanner/executor -------------
+alpha_live:
+  family: alpha101
+  alpha: alpha020
+  direction_sign: -1         # 1=high factor long, -1=low factor long
+  bar_min: 30
+  rebalance_bars: 48         # 30m * 48 = one day
+  hold_bars: 48               # Flat after one day if no replacement signal arrives
+  n_long: 10
+  n_short: 10
+  min_assets_per_bar: 20
+  history_bars: 320
+
+# ------------- Funding-rate strategy -------------
+funding:
+  min_funding_rate: 0.0003   # Minimum positive funding rate
+  basis_max_pct: 0.30        # Skip if basis is too wide
+  spot_fee_bps: 10.0
+  futures_fee_bps: 5.0
+
+# ------------- Cost model -------------
+costs:
+  taker_fee_bps: 4.0         # Taker fee in bps
+  slippage_base_bps: 1.0     # Base slippage
+  slippage_impact_coef: 60.0 # Impact coefficient in bps
+  max_slippage_bps: 80.0     # Slippage cap
+  include_funding: true      # Include funding cost in backtests

@@ -1,0 +1,13 @@
+data/
+outputs/
+runs/
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+rust_backtest/target/
+rust_backtest/Cargo.lock
