@@ -4,7 +4,7 @@ A factor research and trading system for Binance USDⓈ-M perpetual futures: dow
 
 This repository consolidates `Predict_Cryptos` (research) and `Developer_Crypto` (risk management and live trading). The backtesting, trading and factor-mining algorithms are identical to the originals: byte-for-byte comparison tests guarantee the live runner behaves exactly like the original version. See [docs/MIGRATION.md](docs/MIGRATION.md) for a mapping between old and new paths.
 
-> This project is for research and engineering validation only; profits are not guaranteed. Testnet cannot reproduce real slippage, funding fees or fills. Review the code before going to mainnet, and start with a very small amount of capital.
+> **Risk warning:** this project is for research and engineering validation only and is not investment advice. Leveraged crypto derivatives can lose your entire margin; profits are not guaranteed. Testnet cannot reproduce real slippage, funding fees or fills. Review the code before going to mainnet, and start with a very small amount of capital you can afford to lose. Read the full [investment risk disclaimer](DISCLAIMER.md) before use.
 
 ## Pipeline
 
@@ -127,3 +127,11 @@ The tests cover:
 - End-to-end tests of shadow replay.
 
 Rust tests require building `rust_backtest` first; ML tests require torch and are skipped automatically otherwise.
+
+## Disclaimer
+
+This software is for research and educational purposes only and does not constitute financial advice. Trading cryptocurrency derivatives carries a high risk of loss. You use this software at your own risk; the authors accept no liability for any losses. See [DISCLAIMER.md](DISCLAIMER.md).
+
+## License
+
+Released under the [MIT License](LICENSE).
