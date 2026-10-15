@@ -1,38 +1,38 @@
-# 12 可视化看板
+# 12 Dashboard
 
-一个只读的 Streamlit 网站，直接读取 `outputs/` 下已有的结果文件，有三个页面：
+A read-only Streamlit site that reads existing result files under `outputs/` directly. It has three pages:
 
-- **因子排行榜**：读取 Rust 回测结果，可以筛选、排序，对比训练期和测试期，查看单个因子的净值、回撤、十分位收益和成本拆解。
-- **Shadow 回放**：读取用实盘风控引擎回放的回测结果，显示 LIVE/SHADOW 切换、影子账本、成本和保证金占用。
-- **实盘监控**：读取实盘 runner 的输出目录，显示权益、持仓、多空敞口、SHADOW 恢复进度、成本、保证金占用、订单和断线重连记录。
+- **Factor leaderboard**: reads Rust backtest results; filter, sort, compare training vs test periods, and inspect a single factor's NAV, drawdown, decile returns and cost breakdown.
+- **Shadow replay**: reads backtests replayed with the live risk engine, showing LIVE/SHADOW switches, the shadow book, costs and margin usage.
+- **Live monitor**: reads the live runner's output directory, showing equity, positions, long/short exposure, SHADOW recovery progress, costs, margin usage, orders and reconnect records.
 
-回测和实盘使用同一套口径：
-- **成本**：手续费 + 滑点，按引擎的 `fee_bps + slippage_bps`（另加成交量冲击）计算；
-- **资金费**：付出为正；
-- **成本吃掉毛收益** = (手续费 + 滑点 + 资金费) / 扣成本前收益；
-- **SHADOW**：用橙色背景标出。
+Backtests and live trading use the same conventions:
+- **Costs**: fees + slippage, computed from the engine's `fee_bps + slippage_bps` (plus volume impact);
+- **Funding**: positive when paid;
+- **Cost share of gross return** = (fees + slippage + funding) / return before costs;
+- **SHADOW**: highlighted with an orange background.
 
-看板不保存 API key，不连接 Binance，也不能下单，所有操作都在命令行完成。
+The dashboard stores no API keys, does not connect to Binance and cannot place orders; all operations are done from the command line.
 
-## 启动
+## Starting
 
 ```bash
 pip install -e ".[ui]"          # streamlit + plotly
 streamlit run app/streamlit_app.py --server.port 8501 --server.address 127.0.0.1
 ```
 
-在 AutoDL 这类远程机器上，用 SSH 隧道在本地浏览器打开（端口和主机换成你实例的 SSH 信息）：
+On remote machines such as AutoDL, open it in your local browser through an SSH tunnel (replace the port and host with your instance's SSH details):
 
 ```bash
-# 在你自己的电脑上执行，然后访问 http://localhost:8501
-ssh -N -L 8501:127.0.0.1:8501 -p <SSH端口> root@<SSH主机>
+# Run on your own computer, then visit http://localhost:8501
+ssh -N -L 8501:127.0.0.1:8501 -p <SSH port> root@<SSH host>
 ```
 
-Streamlit 没有登录功能。不要用 `--server.address 0.0.0.0` 或平台的公开端口把看板直接暴露到公网，否则任何人都能看到你的持仓和权益。
+Streamlit has no login. Do not expose the dashboard to the public internet with `--server.address 0.0.0.0` or a platform's public port, or anyone will be able to see your positions and equity.
 
-## 因子排行榜
+## Factor leaderboard
 
-数据来自 `scripts/03_backtest/sweep_rust_rebalance.sh` 的输出：
+Data comes from the output of `scripts/03_backtest/sweep_rust_rebalance.sh`:
 
 ```text
 outputs/sweep_train/
@@ -41,80 +41,80 @@ outputs/sweep_train/
 └── 24h/ ...
 ```
 
-左侧栏的设置：
-- **回测结果目录**：自动列出 `outputs/` 下所有包含回测结果的目录，最近更新的排在最前面。
-- **对照期目录**：选择另一个时间段的回测结果（例如 2026 测试期），会增加测试期指标列、训练期 vs 测试期的散点图，详情图里也会叠加测试期的净值和十分位收益。
-- **因子 JSONL**：显示公式、分类、方向和经济假设，并可以按分类筛选。
+Sidebar settings:
+- **Backtest results directory**: automatically lists every directory under `outputs/` that contains backtest results, most recently updated first.
+- **Comparison period directory**: pick backtest results for another time range (e.g. the 2026 test period). This adds test-period metric columns and a training vs test scatter plot, and overlays test-period NAV and decile returns on the detail charts.
+- **Factor JSONL**: shows formula, category, direction and economic hypothesis, and enables filtering by category.
 
-页面内容：
+Page contents:
 
-| 区域 | 内容 |
+| Section | Content |
 |---|---|
-| 筛选 | 调仓周期、Sharpe、收益、最大回撤、搜索、分类；"每个因子只看最佳周期"；"测试期也盈利" |
-| 排行榜 | 点击一行，下方的详情会切换到这个因子和这个周期；可以下载筛选后的 CSV |
-| 跨周期稳定性 | 每个因子在几个周期上盈利、Sharpe 中位数、最差 Sharpe、最差回撤 |
-| 训练 vs 测试 | 两期 Sharpe 散点图、两期都为正的比例、Sharpe 排名的 Spearman 相关系数 |
-| 因子详情 | 各周期指标；净值和回撤（叠加测试期）；十分位平均超额收益；Q1、Q10 和 Q10−Q1 的累计曲线 |
-| 成本拆解 | 扣成本前收益、手续费 + 滑点、资金费、净收益、成本吃掉毛收益的比例、年化换手，以及累计曲线 |
+| Filters | Rebalancing period, Sharpe, return, max drawdown, search, category; "best period per factor only"; "profitable in the test period too" |
+| Leaderboard | Click a row and the details below switch to that factor and period; the filtered CSV can be downloaded |
+| Cross-period stability | For each factor: number of profitable periods, median Sharpe, worst Sharpe, worst drawdown |
+| Training vs test | Scatter of the two periods' Sharpe, share positive in both periods, Spearman correlation of Sharpe ranks |
+| Factor details | Metrics per period; NAV and drawdown (with the test period overlaid); mean excess return per decile; cumulative curves of Q1, Q10 and Q10−Q1 |
+| Cost breakdown | Return before costs, fees + slippage, funding, net return, cost share of gross return, annualized turnover, and cumulative curves |
 
-排行榜里的"成本占本金%"和"成本吃掉毛收益%"只含手续费和滑点（metrics.json 里没有资金费），详情里的成本拆解包含资金费。成本吃掉一半以上毛收益的因子，通常换成更慢的调仓周期会更好。
+"Cost as % of capital" and "cost share of gross return %" in the leaderboard include only fees and slippage (metrics.json has no funding); the cost breakdown in the details includes funding. Factors where costs eat more than half the gross return usually do better with a slower rebalancing period.
 
-Rust 回测按固定杠杆持仓，没有风控状态机，所以没有 SHADOW。想看风控和 SHADOW 对结果的影响，用下面的 Shadow 回放。
+The Rust backtest holds at fixed leverage with no risk state machine, so there is no SHADOW. To see how risk control and SHADOW affect results, use Shadow replay below.
 
-训练 vs 测试页里的 **Spearman 相关系数** 是判断过拟合最直接的指标：
-- 接近 0：训练期排名对测试期几乎没有预测力，排行榜靠前的因子大多是运气；
-- 明显为正（例如 0.2 以上）：训练期的排序在测试期仍然部分有效。
+On the training vs test view, the **Spearman correlation** is the most direct indicator of overfitting:
+- Near 0: training-period ranking has almost no predictive power for the test period; the top of the leaderboard is mostly luck;
+- Clearly positive (e.g. above 0.2): the training-period ordering still partly holds in the test period.
 
-## Shadow 回放
+## Shadow replay
 
-数据来自 `scripts/05_shadow/run_selected_factor_shadow.py --out-dir DIR`，目录结构和 Rust 回测相同（`DIR/<周期>/<因子>.metrics.json`、`.timeseries.csv`）。看板通过 metrics 里的 `final_state` 字段区分两类结果，所以两类目录可以都放在 `outputs/` 下，不会混在一起。
+Data comes from `scripts/05_shadow/run_selected_factor_shadow.py --out-dir DIR`, with the same directory layout as the Rust backtest (`DIR/<period>/<factor>.metrics.json`, `.timeseries.csv`). The dashboard distinguishes the two kinds of results by the `final_state` field in metrics, so both kinds of directories can live under `outputs/` without getting mixed up.
 
-| 区域 | 内容 |
+| Section | Content |
 |---|---|
-| 排行榜 | 收益、Sharpe、回撤、最终状态、进入 SHADOW / 恢复 LIVE 次数、成本占本金、资金费、成本吃掉毛收益 |
-| 详情 · 指标 | 最终状态、SHADOW 时间占比、扣成本前收益、手续费 + 滑点、资金费、净收益 |
-| 详情 · 图 | 实盘账本权益与影子账本净值；累计盈亏拆解；多空名义价值与保证金占用%；SHADOW 时段用橙色背景标出 |
-| 详情 · 表 | 风控事件（止损、日内止损、进入 / 退出 SHADOW）和这次回放的参数 |
+| Leaderboard | Return, Sharpe, drawdown, final state, number of SHADOW entries / LIVE recoveries, cost as % of capital, funding, cost share of gross return |
+| Details · metrics | Final state, share of time in SHADOW, return before costs, fees + slippage, funding, net return |
+| Details · charts | Live book equity and shadow book NAV; cumulative PnL breakdown; long/short notional and margin usage %; SHADOW periods highlighted in orange |
+| Details · tables | Risk events (stop loss, intraday stop, entering / leaving SHADOW) and this replay's parameters |
 
-回放脚本会额外输出几列只用于展示的数据，不参与交易逻辑：
-- `timeseries.csv`：`total_cost`、`total_funding`（引擎的精确累计值）、多空名义价值（实盘账本和影子账本）、SHADOW 周期计数；
-- `metrics.json`：`config`，记录这次回放的参数。
+The replay script outputs a few extra display-only columns that do not affect trading logic:
+- `timeseries.csv`: `total_cost`, `total_funding` (the engine's exact cumulative values), long/short notionals (live book and shadow book), SHADOW period counts;
+- `metrics.json`: `config`, recording this replay's parameters.
 
-保证金占用 = 总名义价值 / 杠杆 / 权益，与 Binance 的初始保证金口径一致。旧版本的回放没有这些列：成本按每步的比例近似重建，不显示仓位和保证金占用，重新运行回放即可补上。
+Margin usage = gross notional / leverage / equity, consistent with Binance's initial-margin convention. Replays from older versions lack these columns: costs are approximately reconstructed from per-step ratios, and positions and margin usage are not shown; rerun the replay to fill them in.
 
-## 实盘监控
+## Live monitor
 
-数据来自 `run_live.py --output DIR`：
+Data comes from `run_live.py --output DIR`:
 
-| 文件 | 用途 |
+| File | Purpose |
 |---|---|
-| `latest.json` | 最近一个周期：权益、持仓、目标仓位、订单 |
-| `audit.jsonl` | 每个周期一行。文件会越来越大，看板只读取末尾 N 行（左侧栏可调） |
-| `engine_state.json` | 风控状态：LIVE/SHADOW、高点、当日开盘权益、被屏蔽的币 |
-| `runner_errors.jsonl` | 网络错误和周期错误，以及重试等待时间 |
+| `latest.json` | The most recent cycle: equity, positions, target positions, orders |
+| `audit.jsonl` | One line per cycle. The file keeps growing, so the dashboard reads only the last N lines (adjustable in the sidebar) |
+| `engine_state.json` | Risk state: LIVE/SHADOW, high-water mark, day-open equity, blocked symbols |
+| `runner_errors.jsonl` | Network and cycle errors, plus retry wait times |
+| `exchange_risk_state.json`, `manual_guard_state.json` | State of the optional exchange-side risk control and manual-change detection |
 
-每条 audit 记录里有一个只读字段 `engine_totals`，包含引擎的累计成本、累计资金费、影子账本状态和风控参数（含恢复条件），供看板使用，runner 本身不会读取它。旧版本 runner 写的 audit 没有这个字段：成本按每周期比例估算，资金费不显示，恢复条件使用左侧栏的设置。
-| `exchange_risk_state.json`、`manual_guard_state.json` | 可选的交易所风控和人工改仓检测状态 |
+Each audit record has a read-only `engine_totals` field containing the engine's cumulative costs, cumulative funding, shadow book state and risk parameters (including recovery conditions). It is for the dashboard; the runner itself never reads it. Audits written by older runners lack this field: costs are estimated from per-cycle ratios, funding is not shown, and recovery conditions use the sidebar settings.
 
-页面内容：
-- **状态栏**：因子、模式（TESTNET/MAINNET，LIVE 或 DRY_RUN）、LIVE/SHADOW 状态、最近更新时间。`latest.json` 超过设定的分钟数没有更新时显示红色警告，这个阈值建议设为 poll 间隔的 2–3 倍。
-- **指标**：账户权益、可用保证金、今日盈亏、距高点回撤、总杠杆、净敞口 / 总敞口（美元中性时接近 0）、累计成本。
-- **SHADOW 状态与恢复条件**：处于 SHADOW 时自动展开。逐条列出恢复条件的当前值和要求（SHADOW 周期数、其中盈利的周期数、影子账本累计收益、账户是否被日内止损冻结），以及影子账本的模拟持仓（不会下单）。
-- **成本与保证金占用**：读取窗口内的手续费 + 滑点、资金费、成本吃掉毛收益的比例、当前和最大保证金占用、总杠杆，以及它们的曲线（SHADOW 时段标橙）。保证金占用 = (权益 − 可用余额) / 权益，直接来自 Binance。成本是引擎按手续费 + 滑点模型算出的精确累计值，和回测口径相同；Binance 实际扣的手续费会因 VIP 等级、BNB 抵扣等有所不同。
-- **持仓**：签名运行时显示交易所的实际持仓，dry-run 时显示引擎的模拟账本；右侧是多空名义价值的柱状图。
-- **目标 vs 实际**：每个币目标仓位和实际仓位的差额，用来发现取整、最小下单额或拒单造成的偏差。
-- **权益与敞口**：权益曲线，SHADOW 时段用橙色背景标出，同时显示影子账本；下方是多头、空头和净敞口。
-- **风控事件 / 最近订单 / 错误与重连 / 状态文件**。
+Page contents:
+- **Status bar**: factor, mode (TESTNET/MAINNET, LIVE or DRY_RUN), LIVE/SHADOW state, last update time. A red warning appears when `latest.json` has not been updated for more than the configured number of minutes; set this threshold to 2–3 times the poll interval.
+- **Metrics**: account equity, available margin, today's PnL, drawdown from peak, gross leverage, net / gross exposure (near 0 when dollar-neutral), cumulative cost.
+- **SHADOW state and recovery conditions**: expanded automatically while in SHADOW. Lists each recovery condition's current value and requirement (number of SHADOW periods, how many were profitable, shadow book cumulative return, whether the account is frozen by the intraday stop), plus the shadow book's simulated positions (no orders are placed).
+- **Costs and margin usage**: fees + slippage, funding, cost share of gross return, current and maximum margin usage and gross leverage within the read window, and their curves (SHADOW periods in orange). Margin usage = (equity − available balance) / equity, straight from Binance. Costs are the engine's exact cumulative values from its fees + slippage model, the same convention as backtesting; the fees Binance actually charges will differ with VIP tier, BNB fee discounts, etc.
+- **Positions**: the exchange's real positions for signed runs, the engine's simulated book for dry-runs; on the right, a bar chart of long/short notionals.
+- **Target vs actual**: the difference between target and actual position per symbol, for spotting deviations caused by rounding, minimum order sizes or rejections.
+- **Equity and exposure**: equity curve with SHADOW periods highlighted in orange, alongside the shadow book; below, long, short and net exposure.
+- **Risk events / recent orders / errors and reconnects / state files**.
 
-页面默认每 30 秒自动刷新，左侧栏可以关闭或修改间隔。
+The page auto-refreshes every 30 seconds by default; this can be turned off or changed in the sidebar.
 
-## 代码结构
+## Code structure
 
-| 文件 | 作用 |
+| File | Role |
 |---|---|
-| `efficient_cryptos/dashboard/data.py` | 所有文件读取和计算，不依赖 streamlit，由 `tests/test_dashboard_data.py` 覆盖（实盘部分用真实 runner 配合假交易所生成数据） |
-| `app/streamlit_app.py` | 入口和页面导航 |
-| `app/views/factors.py`、`shadow.py`、`live.py` | 三个页面（不要放在 `app/pages/`，那个目录名会让 Streamlit 跳过页面导航） |
-| `app/_shared.py` | 路径选择、格式化、配色 |
+| `efficient_cryptos/dashboard/data.py` | All file reading and computation, no streamlit dependency, covered by `tests/test_dashboard_data.py` (the live part uses data produced by the real runner against a fake exchange) |
+| `app/streamlit_app.py` | Entry point and page navigation |
+| `app/views/factors.py`, `shadow.py`, `live.py` | The three pages (do not put them in `app/pages/`; that directory name makes Streamlit bypass page navigation) |
+| `app/_shared.py` | Path selection, formatting, colors |
 
-新增页面时，把数据处理写进 `dashboard/data.py` 并补测试，页面文件只负责展示。
+When adding a page, put data processing in `dashboard/data.py` with tests; page files should only handle presentation.

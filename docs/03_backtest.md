@@ -1,45 +1,45 @@
-# 03 回测
+# 03 Backtest
 
 ```text
-factors.jsonl ──► export_factor_predictions.py ──► <factor>.csv（每行 = 一个时间点 × 一个币种）
+factors.jsonl ──► export_factor_predictions.py ──► <factor>.csv (one row = one timestamp × one symbol)
                                                       │
-                                     sweep_rust_rebalance.sh（1h 2h 4h 8h 12h 24h）
+                                     sweep_rust_rebalance.sh (1h 2h 4h 8h 12h 24h)
                                                       ▼
-                              <周期>/<factor>.metrics.json / layers.csv / timeseries.csv / plots/
+                              <period>/<factor>.metrics.json / layers.csv / timeseries.csv / plots/
 ```
 
-Python 负责执行因子代码；Rust 负责分层、持仓、成本、资金费和净值计算。
+Python executes the factor code; Rust handles layering, positions, costs, funding and NAV.
 
-## 标签
+## Labels
 
-| `--label-mode` | 定义 | 用途 |
+| `--label-mode` | Definition | Use |
 |---|---|---|
-| `horizon`（默认，`--horizon 1`） | 当前 bar 收盘到下一根 bar 收盘的对数收益 | 普通 30m 截面预测、组合回测 |
-| `utc_close` | 当前 bar 收盘到当日 UTC 最后一根收盘 | 日内剩余时间收益 |
-| `funding_event` | 当前 bar 收盘到该币下一次真实 `funding_time` | 资金费结算窗口 |
+| `horizon` (default, `--horizon 1`) | Log return from this bar's close to the next bar's close | Ordinary 30m cross-sectional prediction, portfolio backtests |
+| `utc_close` | From this bar's close to the close of the day's last UTC bar | Rest-of-day return |
+| `funding_event` | From this bar's close to the symbol's next actual `funding_time` | Funding settlement window |
 
-所有标签都会转成市场中性的超额收益：`target = raw_target − 当期截面的 raw_target 均值`。
+All labels are converted to market-neutral excess returns: `target = raw_target − cross-sectional mean of raw_target at that time`.
 
-> **组合回测只支持单根 bar 的标签。** Rust 每一行只记一根 bar 的收益。`utc_close`、`funding_event` 和 `horizon > 1` 的标签跨越多根 bar，逐行累加会重复计算，因此组合收益和 Sharpe 会偏高（导出时会打印警告）。这类标签请看分层统计，不要看组合收益。
+> **Portfolio backtests only support single-bar labels.** Rust books only one bar of return per row. `utc_close`, `funding_event` and `horizon > 1` labels span several bars, so summing them row by row double-counts, and portfolio return and Sharpe come out too high (a warning is printed on export). For such labels look at the layer statistics, not the portfolio return.
 
-## 记账口径
+## Accounting
 
-| 项目 | 规则 |
+| Item | Rule |
 |---|---|
-| 组合收益 | `Σ wᵢ·(exp(raw_targetᵢ) − 1)`，按简单收益加权，与精确账本误差 < 1e-12 |
-| 手续费 | 每单位换手 5bps（taker，`--taker-fee-bps`） |
-| 滑点 | `min(80, 1 + 60 × 成交额 / 该 bar 成交额)` bps |
-| 资金费 | 按真实 `funding_time` 收取：本行持有期 `(t+30m, t+60m]` 内的结算由这一行的仓位支付，支持 1h / 4h / 8h 结算 |
-| 调仓 | 每 `--signal-interval-bars` 根 bar 选一次 Top / Bottom，最长持有 `--signal-hold-bars` 根 |
+| Portfolio return | `Σ wᵢ·(exp(raw_targetᵢ) − 1)`, weighting simple returns; error vs an exact ledger < 1e-12 |
+| Fees | 5 bps per unit of turnover (taker, `--taker-fee-bps`) |
+| Slippage | `min(80, 1 + 60 × traded notional / bar quote volume)` bps |
+| Funding | Charged at actual `funding_time`: settlements within this row's holding period `(t+30m, t+60m]` are paid by this row's position; 1h / 4h / 8h settlement intervals are supported |
+| Rebalancing | Select Top / Bottom every `--signal-interval-bars` bars, hold for at most `--signal-hold-bars` bars |
 
-旧版本用 `exp(Σ wᵢ·logrᵢ) − 1` 计算组合收益。在零漂移的合成数据上，3x 纯随机因子每年会多算约 131%，"永远做空波动最大的币"会多算约 312%。`tests/test_backtest_accounting.py` 用同样的数据检验新公式没有偏差。
+The old version computed portfolio return as `exp(Σ wᵢ·logrᵢ) − 1`. On zero-drift synthetic data, that overstated a 3x pure-random factor by about 131% per year, and "always short the most volatile symbol" by about 312%. `tests/test_backtest_accounting.py` uses the same data to verify that the new formula is unbiased.
 
-## 导出 prediction
+## Exporting predictions
 
 ```bash
 SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,ZECUSDT,MOVRUSDT,NEARUSDT,QNTUSDT,XRPUSDT,DOGEUSDT,SUIUSDT,UNIUSDT,WLDUSDT,1000PEPEUSDT,BNBUSDT,LINKUSDT,ADAUSDT
 
-# 训练期
+# Training period
 python -u scripts/03_backtest/export_factor_predictions.py \
   --factor-jsonl outputs/crypto_factors.jsonl --data-dir data --symbols $SYMBOLS \
   --interval 30m --horizon 1 --days 1100 \
@@ -47,25 +47,25 @@ python -u scripts/03_backtest/export_factor_predictions.py \
   --start 0 --limit 200 --jobs 2 --backend thread --resume \
   --out-dir outputs/pred_train_0_200
 
-# 测试期：只改日期和输出目录
+# Test period: change only the dates and the output directory
   --train-start 2026-01-01 --train-end 2026-10-01 --out-dir outputs/pred_test_0_200
 ```
 
-- `--start` / `--limit`：分批导出。例如 `--start 200 --limit 200` 导出第 201–400 条。
-- `--resume`：跳过已经存在且非空的 CSV。
-- `--backend thread`：多个线程共享同一份特征表，内存占用小很多。`process` 更快，但需要更多内存。
-- `--train-start` / `--train-end`：只决定导出哪段日期。特征（包括滚动窗口）基于 `--days` 天的完整历史计算。
-- 失败的因子（包括被未来函数检查拒绝的）记录在 `failures.json`。
+- `--start` / `--limit`: export in batches. For example, `--start 200 --limit 200` exports records 201–400.
+- `--resume`: skip CSVs that already exist and are non-empty.
+- `--backend thread`: threads share one feature table, using far less memory. `process` is faster but needs more memory.
+- `--train-start` / `--train-end`: only decide which date range is exported. Features (including rolling windows) are computed on the full `--days` history.
+- Failed factors (including those rejected by the look-ahead checker) are recorded in `failures.json`.
 
-CSV 格式：
+CSV format:
 
 ```text
 factor_id,timestamp,symbol,prediction,target,raw_target,quote_volume,funding_rate,funding_event_rate
 ```
 
-`funding_event_rate` 只用于记账，因子代码读不到这一列。没有 `raw_target` / `funding_event_rate` 的旧 CSV 仍然可以输入 Rust，但会打印警告并使用近似口径；`metrics.json` 的 `portfolio_return_basis`、`funding_basis` 字段会标明实际使用的口径。
+`funding_event_rate` is used only for accounting; factor code cannot read this column. Old CSVs without `raw_target` / `funding_event_rate` can still be fed to Rust, but a warning is printed and an approximate basis is used; the `portfolio_return_basis` and `funding_basis` fields in `metrics.json` state which basis was actually used.
 
-## Rust 批量回测
+## Rust batch backtests
 
 ```bash
 cargo build --release --manifest-path rust_backtest/Cargo.toml
@@ -74,12 +74,12 @@ bash scripts/03_backtest/sweep_rust_rebalance.sh \
   --predictions-dir outputs/pred_train_0_200 \
   --output-root outputs/sweep_train_0_200 \
   --jobs 3 --long-percent 10 --short-percent 10 --gross-leverage 1 \
-  --plot-max-points 5000          # 或 --no-plots
+  --plot-max-points 5000          # or --no-plots
 ```
 
-这个脚本对每个因子跑 1h、2h、4h、8h、12h、24h 六种调仓周期（即 2、4、8、16、24、48 根 30m bar）；已有完整结果的会跳过，`--force` 强制重跑。`--gross-leverage` 会同时放大仓位、收益、成本和资金费，但不改变因子的排序。
+The script runs every factor at six rebalancing periods: 1h, 2h, 4h, 8h, 12h and 24h (i.e. 2, 4, 8, 16, 24 and 48 30m bars). Factors with complete results are skipped; `--force` reruns them. `--gross-leverage` scales positions, returns, costs and funding together, but does not change the factor ranking.
 
-单个因子：
+A single factor:
 
 ```bash
 ./rust_backtest/target/release/crypto-factor-backtest \
@@ -90,25 +90,25 @@ bash scripts/03_backtest/sweep_rust_rebalance.sh \
   --gross-leverage 1 --include-costs --include-funding
 ```
 
-输出：
+Outputs:
 
-| 文件 | 内容 |
+| File | Content |
 |---|---|
-| `metrics.json` | `return_pct`、`sharpe`、`max_drawdown_pct`、`avg_turnover`、`total_cost`、`signed_q10_minus_q1`、`abs_q10_minus_q1`、`abs_q10_directional_return`、口径字段 |
-| `layers.csv` | 每个时间点：带符号排序的十层 Q1–Q10、按绝对值排序的十层、按绝对值分层后的方向调整收益 |
-| `timeseries.csv` | 每根 bar 的毛收益、净收益、PnL、净值、回撤、换手、成本、资金费 |
+| `metrics.json` | `return_pct`, `sharpe`, `max_drawdown_pct`, `avg_turnover`, `total_cost`, `signed_q10_minus_q1`, `abs_q10_minus_q1`, `abs_q10_directional_return`, basis fields |
+| `layers.csv` | For each timestamp: signed-rank deciles Q1–Q10, absolute-value-rank deciles, and direction-adjusted returns of the absolute-value deciles |
+| `timeseries.csv` | Per-bar gross return, net return, PnL, NAV, drawdown, turnover, cost and funding |
 
-带符号的 Q10 是预测值最高的一层。按绝对值排序的 Q10 是信号最强的一层，不区分方向，不能和带符号的分层混用。组合始终按带符号的 prediction 做多做空。
+Signed Q10 is the layer with the highest predictions. Absolute-value Q10 is the layer with the strongest signal regardless of direction, and must not be mixed up with the signed layers. The portfolio always goes long and short by the signed prediction.
 
-画图：
+Plotting:
 
 ```bash
 python scripts/03_backtest/plot_rust_backtest.py --kind equity \
   --metrics out/<f>.metrics.json --layers out/<f>.layers.csv --timeseries out/<f>.timeseries.csv --out out/<f>.equity.png
-python scripts/03_backtest/plot_rust_backtest.py --kind layers ...   # 十层累计曲线
+python scripts/03_backtest/plot_rust_backtest.py --kind layers ...   # cumulative curves of the ten layers
 ```
 
-## Python 回测（IC、十分位、生命周期 PnL）
+## Python backtest (IC, deciles, lifecycle PnL)
 
 ```bash
 python scripts/03_backtest/evaluate_generated_factors.py \
@@ -119,10 +119,10 @@ python scripts/03_backtest/evaluate_generated_factors.py \
   --gross-leverage 1 --include-costs --jobs 4 --out outputs/crypto_factor_eval
 ```
 
-输出 `factor_metrics.csv`（训练期和验证期的 IC、RankIC、ICIR、覆盖率、换手、收益、成本）、`selected.jsonl`、`summary.json`、`failures.json`，以及每个因子的 `factors/<id>/report.png`（十分位分布、D10−D1、净值、回撤、换手、成本）。
-筛选条件：先按 IC / ICIR / 覆盖率门槛过滤，再按截面秩相关做贪心去重（`--corr-threshold` 默认 0.80）。`--keep-all` 只出报告、不筛选。
+Outputs `factor_metrics.csv` (training- and validation-period IC, RankIC, ICIR, coverage, turnover, return, cost), `selected.jsonl`, `summary.json`, `failures.json`, and `factors/<id>/report.png` for each factor (decile distribution, D10−D1, NAV, drawdown, turnover, cost).
+Selection: first filter by IC / ICIR / coverage thresholds, then greedily dedupe by cross-sectional rank correlation (`--corr-threshold`, default 0.80). `--keep-all` only produces reports and does no selection.
 
-## 重新回测入选的因子
+## Re-backtesting selected factors
 
 ```bash
 python scripts/03_backtest/backtest_selected_factors.py \
@@ -130,4 +130,4 @@ python scripts/03_backtest/backtest_selected_factors.py \
   --output-dir outputs/selected_test --jobs 2
 ```
 
-按筛选表中每行的（因子, 调仓周期）组合，在指定的 prediction 目录上用 Rust 重新回测并画图，通常用于在测试期验证训练期的筛选结果。
+For each (factor, rebalancing period) pair in the selection table, reruns the Rust backtest on the given prediction directory and plots it. This is typically used to validate training-period selections on the test period.

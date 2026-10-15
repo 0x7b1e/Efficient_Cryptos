@@ -1,6 +1,6 @@
-# 11 DEX 因子
+# 11 DEX factors
 
-DEX 因子目前只完成到"生成公式"这一步：
+DEX factors currently only go as far as "generating formulas":
 
 ```bash
 python scripts/11_dex/generate_dex_factors.py --dry-run --blocks flow liquidity microstructure volume momentum --total-candidates 20
@@ -15,9 +15,9 @@ python scripts/11_dex/generate_dex_factors.py --provider deepseek --model deepse
   --registry-md outputs/dex_factor_registry.md --result-root outputs/dex_factor_results
 ```
 
-DEX 提示词（`efficient_cryptos/mining/prompts/dex/`）只允许使用 DEX 字段，要求按 `pool_id` 分组、使用因果滚动，目标为 `next_30min`。
+The DEX prompts (`efficient_cryptos/mining/prompts/dex/`) only allow DEX fields, require grouping by `pool_id` and causal rolling windows, and target `next_30min`.
 
-## 尚未完成的部分
+## Not yet done
 
-- **数据下载**：原 Predict_Cryptos 中的 `download_dex_data.py`、`find_dex_pools.py`、`stream_download_upload_dex.py` 依赖 `dex_data.gecko_terminal` 模块，但这个模块从未提交到仓库，脚本无法运行，所以没有迁移过来。如果你本地有 `dex_data/`，补充提交后可以恢复这三个脚本。
-- **接入回测**：生成的 DEX 因子还不能直接用 Binance 的回测流程。需要先把各个池子聚合到同一时间粒度，建立池子级别的特征缓存，并确认每个时间点有足够多的池子有有效数据，再接入 Rust 截面回测。
+- **Data download**: `download_dex_data.py`, `find_dex_pools.py` and `stream_download_upload_dex.py` in the original Predict_Cryptos depend on the `dex_data.gecko_terminal` module, which was never committed to that repository, so the scripts could not run and were not migrated. If you have `dex_data/` locally, committing it would let these three scripts be restored.
+- **Backtest integration**: generated DEX factors cannot yet use the Binance backtest pipeline directly. Pools first need to be aggregated to a common time granularity, a pool-level feature cache built, and enough pools with valid data at each timestamp confirmed, before plugging into the Rust cross-sectional backtest.

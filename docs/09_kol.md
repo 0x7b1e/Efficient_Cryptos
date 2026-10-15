@@ -1,20 +1,20 @@
-# 09 KOL 社交因子
+# 09 KOL social factor
 
-把 X/Twitter 白名单账号的推文转成一个 30m 截面因子。这个模块与行情和 DPSK 因子流程完全隔离：
+Turns tweets from allow-listed X/Twitter accounts into a 30m cross-sectional factor. This module is fully isolated from the market data and DPSK factor pipelines:
 
 ```text
-twscrape 账号池 → 白名单增量采集 → SQLite 原始推文库 → 保守的币种识别（BTC/ETH/SOL…）
-  → DeepSeek 打标（JSON）→ KOL 权重 × 互动量 × 时间衰减 → 30m 因子 parquet → 截面回测
+twscrape account pool → incremental allow-list collection → SQLite raw tweet store → conservative symbol recognition (BTC/ETH/SOL…)
+  → DeepSeek labeling (JSON) → KOL weight × engagement × time decay → 30m factor parquet → cross-sectional backtest
 ```
 
-安装：`pip install -e ".[kol]"`（twscrape 0.20.x）。
+Install: `pip install -e ".[kol]"` (twscrape 0.20.x).
 
-## 配置
+## Configuration
 
-- `config/kol/kol_whitelist.yaml`：白名单账号、权重和标签。
-- `config/kol/entity_map.yaml`：币种别名。只添加不会产生歧义的别名。
+- `config/kol/kol_whitelist.yaml`: allow-listed accounts, weights and tags.
+- `config/kol/entity_map.yaml`: symbol aliases. Only add aliases that cannot be ambiguous.
 
-账号用 cookie 登录：
+Accounts log in with cookies:
 
 ```python
 from twscrape import API
@@ -22,34 +22,34 @@ api = API("data/kol_factor/twscrape_accounts.db")
 await api.pool.add_account_cookies("account_1", "auth_token=...; ct0=...")
 ```
 
-不要把 cookie、密码、API key 或账号数据库提交到 Git。
+Never commit cookies, passwords, API keys or the account database to Git.
 
-## 运行
+## Running
 
 ```bash
-# 每 5–30 分钟运行一次；增量采集，重复运行不会产生重复数据
+# Run every 5–30 minutes; collection is incremental, so reruns produce no duplicates
 python scripts/09_kol/collect_once.py \
   --accounts-db data/kol_factor/twscrape_accounts.db --db data/kol_factor/tweets.sqlite \
   --config config/kol/kol_whitelist.yaml --entity-map config/kol/entity_map.yaml
 
-# --db 必须与采集时相同（两个脚本的默认值不同，所以显式传入）
+# --db must match the one used for collection (the two scripts have different defaults, so pass it explicitly)
 python scripts/09_kol/build_factor.py --db data/kol_factor/tweets.sqlite --config config/kol/kol_whitelist.yaml --out data/features/kol_30m.parquet
 ```
 
-采集游标保存在原始推文库的 `metadata` 表里，推文按 tweet id 去重写入。查询形如 `from:handle -is:retweet since:...`；twscrape 相关的细节都封装在 `efficient_cryptos/kol/collector.py` 中。
+The collection cursor is stored in the `metadata` table of the raw tweet store, and tweets are deduplicated by tweet id on write. Queries look like `from:handle -is:retweet since:...`; all twscrape details are encapsulated in `efficient_cryptos/kol/collector.py`.
 
-## 打标与输出
+## Labeling and output
 
-每个（推文, 币种）组合，由大模型返回有界的 JSON：
+For each (tweet, symbol) pair the LLM returns bounded JSON:
 
 ```json
 {"sentiment": -1.0, "conviction": 0.0, "novelty": 0.0, "hype": 0.0, "relevance": 0.0, "rationale": "..."}
 ```
 
-返回值会先校验并截断到合法范围。只有 `relevance` 达到阈值的记录才会计入因子。
+Returned values are validated and clipped to their legal ranges first. Only records whose `relevance` reaches the threshold count toward the factor.
 
-输出列：`timestamp,symbol,kol_factor,kol_abs_factor,mention_count,positive_score,negative_score`。
-- `kol_factor` 带符号，用于决定做多还是做空；
-- `kol_abs_factor` 表示信号强度，用于按绝对值分层的诊断。
+Output columns: `timestamp,symbol,kol_factor,kol_abs_factor,mention_count,positive_score,negative_score`.
+- `kol_factor` is signed and decides long vs short;
+- `kol_abs_factor` is signal strength, used for absolute-value layer diagnostics.
 
-这是一个研究用的适配器，不负责账号管理，也不保证不被限频。请遵守 X 的条款，使用规模小、经过授权的账号池。
+This is a research adapter: it does not manage accounts and makes no guarantee about avoiding rate limits. Follow X's terms and use a small, authorized account pool.
